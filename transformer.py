@@ -56,20 +56,12 @@ class DecoderStack:
 
     def forward(self, encoder_output, decoder_target):
         root_decoder_result = self.root_decoder((encoder_output, decoder_target))
-        return functools.reduce(lambda result, decoder: decoder((encoder_output, result)), self.decoders, root_decoder_result)
-        # for decoder in self.decoders:
-        #     result = decoder((encoder_output, result))
-        # return result
+        return functools.reduce(lambda result, decoder: decoder((encoder_output, result)), self.decoders,
+                                root_decoder_result)
 
 
 def decoder_stack(num_decoders, w_o):
     return DecoderStack(num_decoders, w_o)
-    # root_decoder = [Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)]
-    # decoders = np.array(list(
-    #     map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
-    #         range(num_decoders))))
-    # return nn.Sequential(*(root_decoder + decoders))
-    # return nn.Sequential(*decoders)
 
 
 class Transformer:
@@ -77,11 +69,14 @@ class Transformer:
         self.embedding = embedding
         self.decoders = decoders
         self.encoders = encoders
+        self.linear = torch.randn([DefaultParameters.DEFAULT_WORD_WIDTH, DefaultParameters.DEFAULT_MAX_WORDS])
         self.output_buffer = []
 
     def forward(self, words, decoder_target):
         encoder_block_output = self.encoders.forward(self.embedding(words))
-        return self.decoders.forward(encoder_block_output, decoder_target)
+        decoder_output = self.decoders.forward(encoder_block_output, decoder_target)
+        term_distributions = softmax(torch.matmul(decoder_output, self.linear))
+        return list(map(lambda distribution: distribution.argmax(), term_distributions))
 
 
 class WordSourcedQKVLayer:
@@ -229,7 +224,7 @@ decoder_target = torch.randn([num_words + 5, WORD_WIDTH])
 t = Transformer(encoder_stack(6, W_O), decoder_stack(6, W_O), embedding(ENCODING_MAP))
 output = t.forward(words, decoder_target)
 print(output)
-print(output.shape)
+# print(output.shape)
 # encoder = EncoderCtor(W_O)
 # encoder.eval()
 # values = encoder(words)
