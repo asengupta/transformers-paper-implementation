@@ -109,7 +109,7 @@ class SelfAttentionLayer(nn.Module):
         return self.attention_scores(input_qkv)
 
     def attention_scores(self, qkvs):
-        Q, K, V = list(range(3))
+        Q, K, V = range(3)
         return torch.matmul(
             softmax(torch.matmul(qkvs[Q], torch.transpose(qkvs[K], 0, 1)) / math.sqrt(qkvs[Q].shape[1])), qkvs[V])
 
