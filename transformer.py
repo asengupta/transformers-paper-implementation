@@ -22,23 +22,35 @@ PROJECTION_WIDTH = 64
 SCALE_FACTOR = 100
 FFNN_HIDDEN_LAYER_WIDTH = 2048
 
+W_Q = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
+W_K = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
+W_V = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
+W_O = torch.randn([NUM_HEADS * PROJECTION_WIDTH, WORD_WIDTH]) / SCALE_FACTOR
+
 
 def encoder_stack(num_encoders, w_o):
-    encoders = np.array(list(map(lambda x: Encoder(w_o,
+    encoders = np.array(list(map(lambda x: Encoder(QKVLayer(W_Q, W_K, W_V), w_o,
                                                    DefaultParameters.DEFAULT_NUM_HEADS,
                                                    DefaultParameters.DEFAULT_WORD_WIDTH), range(num_encoders))))
     return nn.Sequential(*encoders)
 
 
-class SelfAttentionLayer(nn.Module):
+class QKVLayer:
     def __init__(self, w_q, w_k, w_v):
-        super(SelfAttentionLayer, self).__init__()
         self.w_q = w_q
         self.w_k = w_k
         self.w_v = w_v
 
     def forward(self, words):
-        return self.attention_scores(qkvs(words, self.w_q, self.w_k, self.w_v))
+        return torch.matmul(words, self.w_q), torch.matmul(words, self.w_k), torch.matmul(words, self.w_v)
+
+
+class SelfAttentionLayer(nn.Module):
+    def __init__(self):
+        super(SelfAttentionLayer, self).__init__()
+
+    def forward(self, input_qkv):
+        return self.attention_scores(input_qkv)
 
     def attention_scores(self, qkvs):
         Q, K, V = list(range(3))
@@ -50,28 +62,31 @@ class MultiheadedAttention(nn.Module):
     def __init__(self, w_o, num_heads=DefaultParameters.DEFAULT_NUM_HEADS):
         super(MultiheadedAttention, self).__init__()
         self.w_o = w_o
-        self.attention_layers = list(map(lambda x: SelfAttentionLayer(W_Q, W_K, W_V), range(num_heads)))
+        self.attention_layers = list(map(lambda x: SelfAttentionLayer(), range(num_heads)))
 
-    def forward(self, input):
+    def forward(self, input_qkv):
         # Concatenating gives [num_words x num_heads * projection_width]
-        attention_vectors = list(map(lambda attention_layer: attention_layer(input), self.attention_layers))
+        attention_vectors = list(map(lambda attention_layer: attention_layer(input_qkv), self.attention_layers))
         concatenated_attention_vectors = torch.cat(attention_vectors, dim=1)
         scaled_concatenated_attention_vectors = torch.matmul(concatenated_attention_vectors, self.w_o)
         return scaled_concatenated_attention_vectors
 
 
 class Encoder(nn.Module):
-    def __init__(self, w_o, num_heads=8, word_width=512):
+    def __init__(self, qkv_source, w_o, num_heads=8, word_width=512):
         super(Encoder, self).__init__()
+        self.qkv_source = qkv_source
         self.layer_norm = nn.LayerNorm(word_width)
         self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
+
         self.feedforward_layer = nn.Sequential(
             nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
             nn.LeakyReLU(),
             nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
     def forward(self, input):
-        mh_output = self.multiheaded_attention_layer(input)
+        input_qkv = self.qkv_source.forward(input)
+        mh_output = self.multiheaded_attention_layer(input_qkv)
         # Adds the residual connection to the output of the attention layer
         layer_normed_multihead_output = self.layer_norm(mh_output + input)
         ffnn_outputs = torch.stack(
@@ -80,10 +95,27 @@ class Encoder(nn.Module):
         return layer_normed_ffnn_output
 
 
-W_Q = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_K = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_V = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_O = torch.randn([NUM_HEADS * PROJECTION_WIDTH, WORD_WIDTH]) / SCALE_FACTOR
+class Decoder(nn.Module):
+    def __init__(self, w_o, num_heads=8, word_width=512):
+        super(Decoder, self).__init__()
+        self.layer_norm = nn.LayerNorm(word_width)
+        self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
+        self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
+        self.feedforward_layer = nn.Sequential(
+            nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
+            nn.LeakyReLU(),
+            nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
+
+    def forward(self, input):
+        encoder_output, decoder_output = input
+        masked_mh_output = self.masked_multiheaded_attention_layer(decoder_output)
+        mh_output = self.multiheaded_attention_layer(encoder_output)
+        # Adds the residual connection to the output of the attention layer
+        layer_normed_multihead_output = self.layer_norm(mh_output + input)
+        ffnn_outputs = torch.stack(
+            list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
+        layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
+        return layer_normed_ffnn_output
 
 
 def qkvs(words, w_q, w_k, w_v):
@@ -94,7 +126,8 @@ def positional_encoding(num_dimensions):
     return lambda pos, dimension: (math.sin(
         pos / math.pow(10000, dimension / DefaultParameters.DEFAULT_WORD_WIDTH)) if (
             dimension % 2 == 0) else math.cos(pos / math.pow(10000, (dimension - 1) / num_dimensions))
-)
+                                   )
+
 
 def encoding_map(positional_encoding):
     num_words = DefaultParameters.DEFAULT_MAX_WORDS
