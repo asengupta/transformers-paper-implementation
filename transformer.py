@@ -99,23 +99,28 @@ class MultiSourcedQKVLayer:
 
 
 class SelfAttentionLayer(nn.Module):
-    def __init__(self):
+    def __init__(self, mask=False):
         super(SelfAttentionLayer, self).__init__()
+        self.mask = mask
 
     def forward(self, input_qkv):
         return self.attention_scores(input_qkv)
 
+    def masked(self, q_dot_k):
+        return q_dot_k.tril() + torch.full(q_dot_k.shape, - math.inf).triu(1)
+
     def attention_scores(self, qkvs):
         Q, K, V = range(3)
-        return torch.matmul(
-            softmax(torch.matmul(qkvs[Q], torch.transpose(qkvs[K], 0, 1)) / math.sqrt(qkvs[Q].shape[1])), qkvs[V])
+        q_dot_k = torch.matmul(qkvs[Q], torch.transpose(qkvs[K], 0, 1)) / math.sqrt(qkvs[Q].shape[1])
+        maybe_masked_q_dot_k = self.masked(q_dot_k) if self.mask else q_dot_k
+        return torch.matmul(softmax(maybe_masked_q_dot_k), qkvs[V])
 
 
 class MultiheadedAttention(nn.Module):
-    def __init__(self, w_o, num_heads=DefaultParameters.DEFAULT_NUM_HEADS):
+    def __init__(self, w_o, num_heads=DefaultParameters.DEFAULT_NUM_HEADS, mask=False):
         super(MultiheadedAttention, self).__init__()
         self.w_o = w_o
-        self.attention_layers = list(map(lambda x: SelfAttentionLayer(), range(num_heads)))
+        self.attention_layers = list(map(lambda x: SelfAttentionLayer(mask=mask), range(num_heads)))
 
     def forward(self, input_qkv):
         # Concatenating gives [num_words x num_heads * projection_width]
@@ -156,7 +161,7 @@ class Decoder(nn.Module):
         self.unmasked_qkv_source = unmasked_qkv_source
         self.masked_qkv_source = previous_decoder_source
         self.layer_norm = nn.LayerNorm(word_width)
-        self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
+        self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads, mask=True)
         self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
         self.feedforward_layer = nn.Sequential(
             nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
