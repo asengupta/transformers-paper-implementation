@@ -29,13 +29,13 @@ W_O = torch.randn([NUM_HEADS * PROJECTION_WIDTH, WORD_WIDTH]) / SCALE_FACTOR
 
 
 def encoder_stack(num_encoders, w_o):
-    encoders = np.array(list(map(lambda x: Encoder(QKVLayer(W_Q, W_K, W_V), w_o,
+    encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
                                                    DefaultParameters.DEFAULT_NUM_HEADS,
                                                    DefaultParameters.DEFAULT_WORD_WIDTH), range(num_encoders))))
     return nn.Sequential(*encoders)
 
 
-class QKVLayer:
+class WordSourcedQKVLayer:
     def __init__(self, w_q, w_k, w_v):
         self.w_q = w_q
         self.w_k = w_k
@@ -43,6 +43,18 @@ class QKVLayer:
 
     def forward(self, words):
         return torch.matmul(words, self.w_q), torch.matmul(words, self.w_k), torch.matmul(words, self.w_v)
+
+
+class MultiSourcedQKVLayer:
+    def __init__(self, w_q, w_k, w_v):
+        self.w_q = w_q
+        self.w_k = w_k
+        self.w_v = w_v
+
+    def forward(self, inputs):
+        encoder_output, decoder_output = inputs
+        return torch.matmul(decoder_output, self.w_q), torch.matmul(encoder_output, self.w_k), torch.matmul(
+            encoder_output, self.w_v)
 
 
 class SelfAttentionLayer(nn.Module):
@@ -96,20 +108,25 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, w_o, num_heads=8, word_width=512):
+    def __init__(self, masked_qkv_source, unmasked_qkv_source, w_o, num_heads=8, word_width=512):
         super(Decoder, self).__init__()
+        self.unmasked_qkv_source = unmasked_qkv_source
+        self.masked_qkv_source = masked_qkv_source
         self.layer_norm = nn.LayerNorm(word_width)
-        self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
         self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
+        self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
         self.feedforward_layer = nn.Sequential(
             nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
             nn.LeakyReLU(),
             nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
     def forward(self, input):
-        encoder_output, decoder_output = input
-        masked_mh_output = self.masked_multiheaded_attention_layer(decoder_output)
-        mh_output = self.multiheaded_attention_layer(encoder_output)
+        encoder_output = input
+        decoder_output = encoder_output
+        masked_mh_output = self.masked_multiheaded_attention_layer(
+            self.masked_qkv_source.forward(decoder_output))
+        input_qkv = self.unmasked_qkv_source.forward((encoder_output, masked_mh_output))
+        mh_output = self.multiheaded_attention_layer(input_qkv)
         # Adds the residual connection to the output of the attention layer
         layer_normed_multihead_output = self.layer_norm(mh_output + input)
         ffnn_outputs = torch.stack(
@@ -122,7 +139,7 @@ def qkvs(words, w_q, w_k, w_v):
     return torch.matmul(words, w_q), torch.matmul(words, w_k), torch.matmul(words, w_v)
 
 
-def positional_encoding(num_dimensions):
+def encoding_seed(num_dimensions):
     return lambda pos, dimension: (math.sin(
         pos / math.pow(10000, dimension / DefaultParameters.DEFAULT_WORD_WIDTH)) if (
             dimension % 2 == 0) else math.cos(pos / math.pow(10000, (dimension - 1) / num_dimensions))
@@ -142,18 +159,21 @@ def encoding_map(positional_encoding):
     return mesh
 
 
-def positionally_encoded(words, encoding_map):
-    return (words + encoding_map[:len(words)]).float()
+def embedding(encoding_map):
+    return lambda words: (words + encoding_map[:len(words)]).float()
 
 
-ENCODING_MAP = encoding_map(positional_encoding(DefaultParameters.DEFAULT_WORD_WIDTH))
+ENCODING_MAP = encoding_map(encoding_seed(DefaultParameters.DEFAULT_WORD_WIDTH))
 num_words = 10
 words = torch.randn([num_words, WORD_WIDTH])
-qkv_words = qkvs(words, W_Q, W_K, W_V)
-stack = encoder_stack(6, W_O)
-values = stack(positionally_encoded(words, ENCODING_MAP))
-print(values)
-print(values.shape)
+# qkv_words = qkvs(words, W_Q, W_K, W_V)
+# encoder_block = encoder_stack(1, W_O)
+encoder_block = Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), W_O)
+decoder_block = Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)
+encoder_output = encoder_block(embedding(ENCODING_MAP)(words))
+decoder_block(encoder_output)
+print(encoder_output)
+print(encoder_output.shape)
 # encoder = EncoderCtor(W_O)
 # encoder.eval()
 # values = encoder(words)
