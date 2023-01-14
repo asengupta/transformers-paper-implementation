@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-import matplotlib.pyplot as plt
+import functools
 
 softmax = torch.nn.Softmax(dim=1)
 
@@ -35,13 +35,41 @@ def encoder_stack(num_encoders, w_o):
     return nn.Sequential(*encoders)
 
 
+class EncoderStack:
+    def __init__(self, num_encoders, w_o):
+        self.encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
+                                                            DefaultParameters.DEFAULT_NUM_HEADS,
+                                                            DefaultParameters.DEFAULT_WORD_WIDTH),
+                                          range(num_encoders))))
+        self.stack = nn.Sequential(*encoders)
+
+    def forward(self, input):
+        return self.stack(input)
+
+
+class DecoderStack:
+    def __init__(self, num_decoders, w_o):
+        self.root_decoder = Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)
+        self.decoders = np.array(list(
+            map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
+                range(num_decoders - 1))))
+
+    def forward(self, encoder_output, decoder_target):
+        root_decoder_result = self.root_decoder((encoder_output, decoder_target))
+        return functools.reduce(lambda result, decoder: decoder((encoder_output, result)), self.decoders, root_decoder_result)
+        # for decoder in self.decoders:
+        #     result = decoder((encoder_output, result))
+        # return result
+
+
 def decoder_stack(num_decoders, w_o):
+    return DecoderStack(num_decoders, w_o)
     # root_decoder = [Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)]
-    decoders = np.array(list(
-        map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
-            range(num_decoders))))
+    # decoders = np.array(list(
+    #     map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
+    #         range(num_decoders))))
     # return nn.Sequential(*(root_decoder + decoders))
-    return nn.Sequential(*decoders)
+    # return nn.Sequential(*decoders)
 
 
 class Transformer:
@@ -49,10 +77,11 @@ class Transformer:
         self.embedding = embedding
         self.decoders = decoders
         self.encoders = encoders
+        self.output_buffer = []
 
-    def forward(self, words):
-        encoder_block_output = self.encoders(self.embedding(words))
-        return self.decoders(encoder_block_output)
+    def forward(self, words, decoder_target):
+        encoder_block_output = self.encoders.forward(self.embedding(words))
+        return self.decoders.forward(encoder_block_output, decoder_target)
 
 
 class WordSourcedQKVLayer:
@@ -121,9 +150,11 @@ class Encoder(nn.Module):
         mh_output = self.multiheaded_attention_layer(input_qkv)
         # Adds the residual connection to the output of the attention layer
         layer_normed_multihead_output = self.layer_norm(mh_output + input)
+        # print(f"LNMH shape={layer_normed_multihead_output.shape}")
         ffnn_outputs = torch.stack(
             list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
         layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
+        # print(f"FFNN Shape={layer_normed_ffnn_output.shape}")
         return layer_normed_ffnn_output
 
 
@@ -141,14 +172,14 @@ class Decoder(nn.Module):
             nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
     def forward(self, input):
-        encoder_output = input
-        decoder_output = encoder_output
+        encoder_output, previous_stage_output = input
+        # decoder_output = encoder_output
         masked_mh_output = self.masked_multiheaded_attention_layer(
-            self.masked_qkv_source.forward(decoder_output))
+            self.masked_qkv_source.forward(previous_stage_output))
         input_qkv = self.unmasked_qkv_source.forward((encoder_output, masked_mh_output))
         mh_output = self.multiheaded_attention_layer(input_qkv)
         # Adds the residual connection to the output of the attention layer
-        layer_normed_multihead_output = self.layer_norm(mh_output + input)
+        layer_normed_multihead_output = self.layer_norm(mh_output + previous_stage_output)
         ffnn_outputs = torch.stack(
             list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
         layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
@@ -186,6 +217,7 @@ def embedding(encoding_map):
 ENCODING_MAP = encoding_map(encoding_seed(DefaultParameters.DEFAULT_WORD_WIDTH))
 num_words = 10
 words = torch.randn([num_words, WORD_WIDTH])
+decoder_target = torch.randn([num_words + 5, WORD_WIDTH])
 # qkv_words = qkvs(words, W_Q, W_K, W_V)
 # encoder_block = encoder_stack(1, W_O)
 # encoder_block = Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), W_O)
@@ -195,7 +227,7 @@ words = torch.randn([num_words, WORD_WIDTH])
 # print(decoder_output)
 # print(decoder_output.shape)
 t = Transformer(encoder_stack(6, W_O), decoder_stack(6, W_O), embedding(ENCODING_MAP))
-output = t.forward(words)
+output = t.forward(words, decoder_target)
 print(output)
 print(output.shape)
 # encoder = EncoderCtor(W_O)
