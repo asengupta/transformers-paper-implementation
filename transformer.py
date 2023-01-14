@@ -35,6 +35,26 @@ def encoder_stack(num_encoders, w_o):
     return nn.Sequential(*encoders)
 
 
+def decoder_stack(num_decoders, w_o):
+    # root_decoder = [Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)]
+    decoders = np.array(list(
+        map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
+            range(num_decoders))))
+    # return nn.Sequential(*(root_decoder + decoders))
+    return nn.Sequential(*decoders)
+
+
+class Transformer:
+    def __init__(self, encoders, decoders, embedding):
+        self.embedding = embedding
+        self.decoders = decoders
+        self.encoders = encoders
+
+    def forward(self, words):
+        encoder_block_output = self.encoders(self.embedding(words))
+        return self.decoders(encoder_block_output)
+
+
 class WordSourcedQKVLayer:
     def __init__(self, w_q, w_k, w_v):
         self.w_q = w_q
@@ -108,10 +128,10 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, masked_qkv_source, unmasked_qkv_source, w_o, num_heads=8, word_width=512):
+    def __init__(self, previous_decoder_source, unmasked_qkv_source, w_o, num_heads=8, word_width=512):
         super(Decoder, self).__init__()
         self.unmasked_qkv_source = unmasked_qkv_source
-        self.masked_qkv_source = masked_qkv_source
+        self.masked_qkv_source = previous_decoder_source
         self.layer_norm = nn.LayerNorm(word_width)
         self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
         self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
@@ -168,12 +188,16 @@ num_words = 10
 words = torch.randn([num_words, WORD_WIDTH])
 # qkv_words = qkvs(words, W_Q, W_K, W_V)
 # encoder_block = encoder_stack(1, W_O)
-encoder_block = Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), W_O)
-decoder_block = Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)
-encoder_output = encoder_block(embedding(ENCODING_MAP)(words))
-decoder_block(encoder_output)
-print(encoder_output)
-print(encoder_output.shape)
+# encoder_block = Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), W_O)
+# decoder_1 = Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)
+# encoder_output = encoder_block(embedding(ENCODING_MAP)(words))
+# decoder_output = decoder_1(encoder_output)
+# print(decoder_output)
+# print(decoder_output.shape)
+t = Transformer(encoder_stack(6, W_O), decoder_stack(6, W_O), embedding(ENCODING_MAP))
+output = t.forward(words)
+print(output)
+print(output.shape)
 # encoder = EncoderCtor(W_O)
 # encoder.eval()
 # values = encoder(words)
