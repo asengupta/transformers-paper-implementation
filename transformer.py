@@ -7,25 +7,20 @@ import functools
 softmax = torch.nn.Softmax(dim=1)
 
 
-class DefaultParameters:
-    DEFAULT_NUM_HEADS = 8
-    DEFAULT_WORD_WIDTH = 512
-    DEFAULT_PROJECTION_WIDTH = 64
-    DEFAULT_SCALE_FACTOR = 100
-    DEFAULT_FFNN_HIDDEN_LAYER_WIDTH = 2048
-    DEFAULT_MAX_WORDS = 25
+class Parameters:
+    NUM_HEADS = 8
+    WORD_WIDTH = 512
+    PROJECTION_WIDTH = 64
+    SCALE_FACTOR = 100
+    FFNN_HIDDEN_LAYER_WIDTH = 2048
+    MAX_WORDS = 25
 
 
-NUM_HEADS = 8
-WORD_WIDTH = 512
-PROJECTION_WIDTH = 64
-SCALE_FACTOR = 100
-FFNN_HIDDEN_LAYER_WIDTH = 2048
-
-W_Q = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_K = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_V = torch.randn([WORD_WIDTH, PROJECTION_WIDTH]) / SCALE_FACTOR
-W_O = torch.randn([NUM_HEADS * PROJECTION_WIDTH, WORD_WIDTH]) / SCALE_FACTOR
+W_Q = torch.randn([Parameters.WORD_WIDTH, Parameters.PROJECTION_WIDTH]) / Parameters.SCALE_FACTOR
+W_K = torch.randn([Parameters.WORD_WIDTH, Parameters.PROJECTION_WIDTH]) / Parameters.SCALE_FACTOR
+W_V = torch.randn([Parameters.WORD_WIDTH, Parameters.PROJECTION_WIDTH]) / Parameters.SCALE_FACTOR
+W_O = torch.randn([Parameters.NUM_HEADS * Parameters.PROJECTION_WIDTH,
+                   Parameters.WORD_WIDTH]) / Parameters.SCALE_FACTOR
 
 
 def encoder_stack(num_encoders, w_o):
@@ -35,8 +30,8 @@ def encoder_stack(num_encoders, w_o):
 class EncoderStack:
     def __init__(self, num_encoders, w_o):
         self.encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
-                                                            DefaultParameters.DEFAULT_NUM_HEADS,
-                                                            DefaultParameters.DEFAULT_WORD_WIDTH),
+                                                            Parameters.NUM_HEADS,
+                                                            Parameters.WORD_WIDTH),
                                           range(num_encoders))))
         self.stack = nn.Sequential(*self.encoders)
 
@@ -66,7 +61,7 @@ class Transformer:
         self.embedding = embedding
         self.decoders = decoders
         self.encoders = encoders
-        self.linear = torch.randn([DefaultParameters.DEFAULT_WORD_WIDTH, DefaultParameters.DEFAULT_MAX_WORDS])
+        self.linear = torch.randn([Parameters.WORD_WIDTH, Parameters.MAX_WORDS])
         self.output_buffer = []
 
     def forward(self, words, decoder_target):
@@ -117,7 +112,7 @@ class SelfAttentionLayer(nn.Module):
 
 
 class MultiheadedAttention(nn.Module):
-    def __init__(self, w_o, num_heads=DefaultParameters.DEFAULT_NUM_HEADS, mask=False):
+    def __init__(self, w_o, num_heads=Parameters.NUM_HEADS, mask=False):
         super(MultiheadedAttention, self).__init__()
         self.w_o = w_o
         self.attention_layers = list(map(lambda x: SelfAttentionLayer(mask=mask), range(num_heads)))
@@ -136,11 +131,10 @@ class Encoder(nn.Module):
         self.qkv_source = qkv_source
         self.layer_norm = nn.LayerNorm(word_width)
         self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
-
         self.feedforward_layer = nn.Sequential(
-            nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
+            nn.Linear(word_width, Parameters.FFNN_HIDDEN_LAYER_WIDTH, bias=True),
             nn.LeakyReLU(),
-            nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
+            nn.Linear(Parameters.FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
     def forward(self, input):
         input_qkv = self.qkv_source.forward(input)
@@ -164,9 +158,9 @@ class Decoder(nn.Module):
         self.masked_multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads, mask=True)
         self.multiheaded_attention_layer = MultiheadedAttention(w_o, num_heads)
         self.feedforward_layer = nn.Sequential(
-            nn.Linear(word_width, DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, bias=True),
+            nn.Linear(word_width, Parameters.FFNN_HIDDEN_LAYER_WIDTH, bias=True),
             nn.LeakyReLU(),
-            nn.Linear(DefaultParameters.DEFAULT_FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
+            nn.Linear(Parameters.FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
     def forward(self, input):
         encoder_output, previous_stage_output = input
@@ -189,15 +183,15 @@ def qkvs(words, w_q, w_k, w_v):
 
 def encoding_seed(num_dimensions):
     return lambda pos, dimension: (math.sin(
-        pos / math.pow(10000, dimension / DefaultParameters.DEFAULT_WORD_WIDTH)) if (
+        pos / math.pow(10000, dimension / Parameters.WORD_WIDTH)) if (
             dimension % 2 == 0) else math.cos(pos / math.pow(10000, (dimension - 1) / num_dimensions))
                                    )
 
 
 def encoding_map(positional_encoding):
-    num_words = DefaultParameters.DEFAULT_MAX_WORDS
+    num_words = Parameters.MAX_WORDS
     positions = range(num_words)
-    dimensions = range(DefaultParameters.DEFAULT_WORD_WIDTH)
+    dimensions = range(Parameters.WORD_WIDTH)
     mesh = np.zeros([len(positions), len(dimensions)])
 
     for dimension in dimensions:
@@ -211,10 +205,10 @@ def embedding(encoding_map):
     return lambda words: (words + encoding_map[:len(words)]).float()
 
 
-ENCODING_MAP = encoding_map(encoding_seed(DefaultParameters.DEFAULT_WORD_WIDTH))
+ENCODING_MAP = encoding_map(encoding_seed(Parameters.WORD_WIDTH))
 num_words = 10
-words = torch.randn([num_words, WORD_WIDTH])
-decoder_target = torch.randn([num_words + 5, WORD_WIDTH])
+words = torch.randn([num_words, Parameters.WORD_WIDTH])
+decoder_target = torch.randn([num_words + 5, Parameters.WORD_WIDTH])
 # qkv_words = qkvs(words, W_Q, W_K, W_V)
 # encoder_block = encoder_stack(1, W_O)
 # encoder_block = Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), W_O)
