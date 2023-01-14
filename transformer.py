@@ -29,10 +29,7 @@ W_O = torch.randn([NUM_HEADS * PROJECTION_WIDTH, WORD_WIDTH]) / SCALE_FACTOR
 
 
 def encoder_stack(num_encoders, w_o):
-    encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
-                                                   DefaultParameters.DEFAULT_NUM_HEADS,
-                                                   DefaultParameters.DEFAULT_WORD_WIDTH), range(num_encoders))))
-    return nn.Sequential(*encoders)
+    return EncoderStack(num_encoders, w_o)
 
 
 class EncoderStack:
@@ -41,7 +38,7 @@ class EncoderStack:
                                                             DefaultParameters.DEFAULT_NUM_HEADS,
                                                             DefaultParameters.DEFAULT_WORD_WIDTH),
                                           range(num_encoders))))
-        self.stack = nn.Sequential(*encoders)
+        self.stack = nn.Sequential(*self.encoders)
 
     def forward(self, input):
         return self.stack(input)
@@ -224,9 +221,3 @@ decoder_target = torch.randn([num_words + 5, WORD_WIDTH])
 t = Transformer(encoder_stack(6, W_O), decoder_stack(6, W_O), embedding(ENCODING_MAP))
 output = t.forward(words, decoder_target)
 print(output)
-# print(output.shape)
-# encoder = EncoderCtor(W_O)
-# encoder.eval()
-# values = encoder(words)
-# print(values)
-# print(values.shape)
