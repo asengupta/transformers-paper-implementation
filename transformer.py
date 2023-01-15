@@ -29,11 +29,11 @@ def encoder_stack(num_encoders, w_o):
 
 class EncoderStack:
     def __init__(self, num_encoders, w_o):
-        self.encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
+        encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
                                                             Parameters.NUM_HEADS,
                                                             Parameters.WORD_WIDTH),
                                           range(num_encoders))))
-        self.stack = nn.Sequential(*self.encoders)
+        self.stack = nn.Sequential(*encoders)
 
     def forward(self, input):
         return self.stack(input)
@@ -41,15 +41,13 @@ class EncoderStack:
 
 class DecoderStack:
     def __init__(self, num_decoders, w_o):
-        self.root_decoder = Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), W_O)
-        self.decoders = np.array(list(
+        decoders = np.array(list(
             map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
-                range(num_decoders - 1))))
+                range(num_decoders))))
+        self.stack = nn.Sequential(*decoders)
 
     def forward(self, encoder_output, decoder_target):
-        root_decoder_result = self.root_decoder((encoder_output, decoder_target))
-        return functools.reduce(lambda result, decoder: decoder((encoder_output, result)), self.decoders,
-                                root_decoder_result)
+        return self.stack((encoder_output, decoder_target))
 
 
 def decoder_stack(num_decoders, w_o):
@@ -66,7 +64,7 @@ class Transformer:
 
     def forward(self, words, decoder_target):
         encoder_block_output = self.encoders.forward(self.embedding(words))
-        decoder_output = self.decoders.forward(encoder_block_output, decoder_target)
+        encoder_output, decoder_output = self.decoders.forward(encoder_block_output, decoder_target)
         term_distributions = softmax(torch.matmul(decoder_output, self.linear))
         return list(map(lambda distribution: distribution.argmax(), term_distributions))
 
@@ -174,7 +172,7 @@ class Decoder(nn.Module):
         ffnn_outputs = torch.stack(
             list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
         layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
-        return layer_normed_ffnn_output
+        return (encoder_output, layer_normed_ffnn_output)
 
 
 def qkvs(words, w_q, w_k, w_v):
