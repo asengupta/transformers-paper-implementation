@@ -1,8 +1,7 @@
+import math
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import math
-import functools
 
 softmax = torch.nn.Softmax(dim=1)
 
@@ -29,7 +28,7 @@ def encoder_stack(num_encoders, w_o):
 
 class EncoderStack:
     def __init__(self, num_encoders, w_o):
-        encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
+        encoders = np.array(list(map(lambda x: Encoder(SingleSourceQKVLayer(W_Q, W_K, W_V), w_o,
                                                        Parameters.NUM_HEADS,
                                                        Parameters.WORD_WIDTH),
                                      range(num_encoders))))
@@ -42,7 +41,7 @@ class EncoderStack:
 class DecoderStack:
     def __init__(self, num_decoders, w_o):
         decoders = np.array(list(
-            map(lambda x: Decoder(WordSourcedQKVLayer(W_Q, W_K, W_V), MultiSourcedQKVLayer(W_Q, W_K, W_V), w_o),
+            map(lambda x: Decoder(SingleSourceQKVLayer(W_Q, W_K, W_V), MultiSourceQKVLayer(W_Q, W_K, W_V), w_o),
                 range(num_decoders))))
         self.stack = nn.Sequential(*decoders)
 
@@ -60,7 +59,6 @@ class Transformer:
         self.decoders = decoders
         self.encoders = encoders
         self.linear = torch.randn([Parameters.WORD_WIDTH, Parameters.MAX_WORDS])
-        self.output_buffer = []
 
     def forward(self, words, decoder_target):
         encoder_block_output = self.encoders.forward(self.embedding(words))
@@ -69,7 +67,9 @@ class Transformer:
         return list(map(lambda distribution: distribution.argmax(), term_distributions))
 
 
-class WordSourcedQKVLayer:
+# This QKV 'layer' is used to feed data to the encoder attention layer and the masked attention layer of the Decoder.
+# The source of this layer is just the single set of words
+class SingleSourceQKVLayer:
     def __init__(self, w_q, w_k, w_v):
         self.qkv = qkv(w_q, w_k, w_v)
 
@@ -83,7 +83,10 @@ def qkv(w_q, w_k, w_v):
             value_input, w_v))
 
 
-class MultiSourcedQKVLayer:
+# This QKV 'layer' is used to feed data to the Encoder-Decoder attention layer. Because that layer uses the Query
+# from the previous Decoder stage and the Key-Value from the Encoder output, the source of these embeddings
+# is not a single one.
+class MultiSourceQKVLayer:
     def __init__(self, w_q, w_k, w_v):
         self.qkv = qkv(w_q, w_k, w_v)
 
@@ -104,10 +107,10 @@ class SelfAttentionLayer(nn.Module):
         return q_dot_k.tril() + torch.full(q_dot_k.shape, - math.inf).triu(1)
 
     def attention_scores(self, qkvs):
-        Q, K, V = range(3)
-        q_dot_k = torch.matmul(qkvs[Q], torch.transpose(qkvs[K], 0, 1)) / math.sqrt(qkvs[Q].shape[1])
+        q, k, v = qkvs
+        q_dot_k = torch.matmul(q, k.t()) / math.sqrt(q.shape[1])
         maybe_masked_q_dot_k = self.masked(q_dot_k) if self.mask else q_dot_k
-        return torch.matmul(softmax(maybe_masked_q_dot_k), qkvs[V])
+        return torch.matmul(softmax(maybe_masked_q_dot_k), v)
 
 
 class MultiheadedAttention(nn.Module):
@@ -163,7 +166,6 @@ class Decoder(nn.Module):
 
     def forward(self, input):
         encoder_output, previous_stage_output = input
-        # decoder_output = encoder_output
         masked_mh_output = self.masked_multiheaded_attention_layer(
             self.masked_qkv_source.forward(previous_stage_output))
         input_qkv = self.unmasked_qkv_source.forward((encoder_output, masked_mh_output))
