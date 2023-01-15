@@ -2,9 +2,9 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+from enum import Enum
 
 softmax = torch.nn.Softmax(dim=1)
-
 
 class Parameters:
     NUM_HEADS = 8
@@ -13,6 +13,12 @@ class Parameters:
     SCALE_FACTOR = 100
     FFNN_HIDDEN_LAYER_WIDTH = 2048
     MAX_WORDS = 25
+
+class TransformerMode(Enum):
+    INFERENCE = 1
+    TRAINING = 1
+class Tokens:
+    START_TOKEN = torch.randn(Parameters.WORD_WIDTH)
 
 
 W_Q = torch.randn([Parameters.WORD_WIDTH, Parameters.PROJECTION_WIDTH]) / Parameters.SCALE_FACTOR
@@ -39,25 +45,31 @@ class EncoderStack:
 
 
 class DecoderStack:
-    def __init__(self, num_decoders, w_o):
+    def __init__(self, num_decoders, w_o, mode=TransformerMode.INFERENCE):
+        self.mode = mode
         decoders = np.array(list(
             map(lambda x: Decoder(SingleSourceQKVLayer(W_Q, W_K, W_V), MultiSourceQKVLayer(W_Q, W_K, W_V), w_o),
                 range(num_decoders))))
         self.stack = nn.Sequential(*decoders)
+        self.buffer = [Tokens.START_TOKEN]
 
     def forward(self, encoder_output, decoder_target):
-        return self.stack((encoder_output, decoder_target))
+        output = self.stack((encoder_output, decoder_target))
+        self.buffer.append(output)
+        return output
 
+    def set_mode(self, mode):
+        self.mode = mode
 
-def decoder_stack(num_decoders, w_o):
-    return DecoderStack(num_decoders, w_o)
+def decoder_stack(num_decoders, w_o, mode=TransformerMode.INFERENCE):
+    return DecoderStack(num_decoders, w_o, mode)
 
 
 class Transformer:
-    def __init__(self, encoders, decoders, embedding):
-        self.embedding = embedding
-        self.decoders = decoders
-        self.encoders = encoders
+    def __init__(self, mode=TransformerMode.INFERENCE):
+        self.embedding = embedding(ENCODING_MAP)
+        self.decoders = decoder_stack(6, W_O, mode)
+        self.encoders = encoder_stack(6, W_O)
         self.linear = torch.randn([Parameters.WORD_WIDTH, Parameters.MAX_WORDS])
 
     def forward(self, words, decoder_target):
@@ -66,6 +78,8 @@ class Transformer:
         term_distributions = softmax(torch.matmul(decoder_output, self.linear))
         return list(map(lambda distribution: distribution.argmax(), term_distributions))
 
+    def set_mode(self, mode):
+        self.decoders.set_mode(mode)
 
 # This QKV 'layer' is used to feed data to the encoder attention layer and the masked attention layer of the Decoder.
 # The source of this layer is just the single set of words
@@ -210,6 +224,6 @@ ENCODING_MAP = encoding_map(encoding_seed(Parameters.WORD_WIDTH))
 num_words = 10
 words = torch.randn([num_words, Parameters.WORD_WIDTH])
 decoder_target = torch.randn([num_words + 5, Parameters.WORD_WIDTH])
-t = Transformer(encoder_stack(6, W_O), decoder_stack(6, W_O), embedding(ENCODING_MAP))
+t = Transformer()
 output = t.forward(words, decoder_target)
 print(output)
