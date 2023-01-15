@@ -6,6 +6,7 @@ from enum import Enum
 
 softmax = torch.nn.Softmax(dim=1)
 
+
 class Parameters:
     NUM_HEADS = 8
     WORD_WIDTH = 512
@@ -14,9 +15,12 @@ class Parameters:
     FFNN_HIDDEN_LAYER_WIDTH = 2048
     MAX_WORDS = 25
 
+
 class TransformerMode(Enum):
     INFERENCE = 1
-    TRAINING = 1
+    TRAINING = 2
+
+
 class Tokens:
     START_TOKEN = torch.randn(Parameters.WORD_WIDTH)
 
@@ -45,41 +49,60 @@ class EncoderStack:
 
 
 class DecoderStack:
-    def __init__(self, num_decoders, w_o, mode=TransformerMode.INFERENCE):
-        self.mode = mode
+    def __init__(self, num_decoders, w_o):
         decoders = np.array(list(
             map(lambda x: Decoder(SingleSourceQKVLayer(W_Q, W_K, W_V), MultiSourceQKVLayer(W_Q, W_K, W_V), w_o),
                 range(num_decoders))))
         self.stack = nn.Sequential(*decoders)
-        self.buffer = [Tokens.START_TOKEN]
 
     def forward(self, encoder_output, decoder_target):
-        output = self.stack((encoder_output, decoder_target))
-        self.buffer.append(output)
-        return output
+        encoder_output, decoder_output = self.stack((encoder_output, decoder_target))
+        return decoder_output
 
     def set_mode(self, mode):
         self.mode = mode
 
+
 def decoder_stack(num_decoders, w_o, mode=TransformerMode.INFERENCE):
-    return DecoderStack(num_decoders, w_o, mode)
+    return DecoderStack(num_decoders, w_o)
 
 
 class Transformer:
-    def __init__(self, mode=TransformerMode.INFERENCE):
-        self.embedding = embedding(ENCODING_MAP)
-        self.decoders = decoder_stack(6, W_O, mode)
+    def __init__(self, vocabulary_map, mode=TransformerMode.INFERENCE):
+        self.vocabulary_map = vocabulary_map
+        self.mode = mode
+        self.embedding = embedding(encoding_map(encoding_seed(Parameters.WORD_WIDTH)))
+        self.decoders = decoder_stack(6, W_O)
         self.encoders = encoder_stack(6, W_O)
         self.linear = torch.randn([Parameters.WORD_WIDTH, Parameters.MAX_WORDS])
+        self.vector_buffer = [Tokens.START_TOKEN]
+        self.text_buffer = ["<SOS>"]
 
-    def forward(self, words, decoder_target):
+    def forward(self, words, decoder_target=None):
+        if (decoder_target is None and self.mode == TransformerMode.TRAINING):
+            raise Exception("Decoder Target must be provided during Training mode.")
+        decoder_stack_input = decoder_target if self.mode == TransformerMode.TRAINING else torch.stack(
+            self.vector_buffer)
+        print(f"Transformer mode={self.mode}")
         encoder_block_output = self.encoders.forward(self.embedding(words))
-        encoder_output, decoder_output = self.decoders.forward(encoder_block_output, decoder_target)
+        print(f"Stack input={decoder_stack_input.shape}")
+
+        decoder_output = self.decoders.forward(encoder_block_output, decoder_stack_input)
         term_distributions = softmax(torch.matmul(decoder_output, self.linear))
-        return list(map(lambda distribution: distribution.argmax(), term_distributions))
+        transformer_output = list(
+            map(lambda distribution: self.vocabulary_map[distribution.argmax()], term_distributions))
+        text_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[0], transformer_output))
+        vector_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[1], transformer_output))
+        if (self.mode == TransformerMode.INFERENCE):
+            # The last word is chosen as the predicted word
+            self.vector_buffer.append(transformer_output[-1][1])
+            self.text_buffer.append(transformer_output[-1][0])
+        return [text_buffer, vector_buffer] if self.mode == TransformerMode.TRAINING else [self.text_buffer,
+                                                                                           self.vector_buffer]
 
     def set_mode(self, mode):
         self.decoders.set_mode(mode)
+
 
 # This QKV 'layer' is used to feed data to the encoder attention layer and the masked attention layer of the Decoder.
 # The source of this layer is just the single set of words
@@ -220,10 +243,15 @@ def embedding(encoding_map):
     return lambda words: (words + encoding_map[:len(words)]).float()
 
 
-ENCODING_MAP = encoding_map(encoding_seed(Parameters.WORD_WIDTH))
+VOCABULARY_MAP = []
+for i in range(Parameters.MAX_WORDS):
+    VOCABULARY_MAP.append(["Word", torch.randn(Parameters.WORD_WIDTH)])
+
 num_words = 10
 words = torch.randn([num_words, Parameters.WORD_WIDTH])
-decoder_target = torch.randn([num_words + 5, Parameters.WORD_WIDTH])
-t = Transformer()
+decoder_target = torch.randn([5, Parameters.WORD_WIDTH])
+t = Transformer(VOCABULARY_MAP, mode=TransformerMode.TRAINING)
 output = t.forward(words, decoder_target)
-print(output)
+# output = t.forward(words, decoder_target)
+# output = t.forward(words, decoder_target)
+print(output[0])
