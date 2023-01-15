@@ -188,8 +188,7 @@ def encoding_seed(num_dimensions):
 
 
 def encoding_map(positional_encoding):
-    num_words = Parameters.MAX_WORDS
-    positions = range(num_words)
+    positions = range(Parameters.MAX_WORDS)
     dimensions = range(Parameters.WORD_WIDTH)
     mesh = np.zeros([len(positions), len(dimensions)])
 
