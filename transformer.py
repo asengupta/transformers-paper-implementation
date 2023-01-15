@@ -164,6 +164,11 @@ class Decoder(nn.Module):
             nn.LeakyReLU(),
             nn.Linear(Parameters.FFNN_HIDDEN_LAYER_WIDTH, word_width, bias=True))
 
+    # The encoder output is injected directly into the sublayer of every Decoder. To build up the chain of Decoders
+    # in PyTorch, so that we can put the full stack inside a Sequential block, we simply inject the encoder output
+    # to the root Decoder, and have it output the encoder output (together with the actual Decoder output) as part of
+    # the Decoder's actual output to make it easy for the next Decoder in the stack to consume the Encoder and Decoder
+    # outputs
     def forward(self, input):
         encoder_output, previous_stage_output = input
         masked_mh_output = self.masked_multiheaded_attention_layer(
@@ -176,10 +181,6 @@ class Decoder(nn.Module):
             list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
         layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
         return (encoder_output, layer_normed_ffnn_output)
-
-
-def qkvs(words, w_q, w_k, w_v):
-    return torch.matmul(words, w_q), torch.matmul(words, w_k), torch.matmul(words, w_v)
 
 
 def encoding_seed(num_dimensions):
