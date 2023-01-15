@@ -89,14 +89,14 @@ class Transformer:
 
         decoder_output = self.decoders.forward(encoder_block_output, decoder_stack_input)
         term_distributions = softmax(torch.matmul(decoder_output, self.linear))
-        transformer_output = list(
+        vocabulary_output = list(
             map(lambda distribution: self.vocabulary_map[distribution.argmax()], term_distributions))
-        text_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[0], transformer_output))
-        vector_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[1], transformer_output))
+        text_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[0], vocabulary_output))
+        vector_buffer = list(map(lambda vocabulary_entry: vocabulary_entry[1], vocabulary_output))
         if (self.mode == TransformerMode.INFERENCE):
             # The last word is chosen as the predicted word
-            self.vector_buffer.append(transformer_output[-1][1])
-            self.text_buffer.append(transformer_output[-1][0])
+            self.vector_buffer.append(vocabulary_output[-1][1])
+            self.text_buffer.append(vocabulary_output[-1][0])
         return [text_buffer, vector_buffer] if self.mode == TransformerMode.TRAINING else [self.text_buffer,
                                                                                            self.vector_buffer]
 
