@@ -30,9 +30,9 @@ def encoder_stack(num_encoders, w_o):
 class EncoderStack:
     def __init__(self, num_encoders, w_o):
         encoders = np.array(list(map(lambda x: Encoder(WordSourcedQKVLayer(W_Q, W_K, W_V), w_o,
-                                                            Parameters.NUM_HEADS,
-                                                            Parameters.WORD_WIDTH),
-                                          range(num_encoders))))
+                                                       Parameters.NUM_HEADS,
+                                                       Parameters.WORD_WIDTH),
+                                     range(num_encoders))))
         self.stack = nn.Sequential(*encoders)
 
     def forward(self, input):
@@ -71,24 +71,25 @@ class Transformer:
 
 class WordSourcedQKVLayer:
     def __init__(self, w_q, w_k, w_v):
-        self.w_q = w_q
-        self.w_k = w_k
-        self.w_v = w_v
+        self.qkv = qkv(w_q, w_k, w_v)
 
     def forward(self, words):
-        return torch.matmul(words, self.w_q), torch.matmul(words, self.w_k), torch.matmul(words, self.w_v)
+        return self.qkv(words, words, words)
+
+
+def qkv(w_q, w_k, w_v):
+    return lambda query_input, key_input, value_input: (
+        torch.matmul(query_input, w_q), torch.matmul(key_input, w_k), torch.matmul(
+            value_input, w_v))
 
 
 class MultiSourcedQKVLayer:
     def __init__(self, w_q, w_k, w_v):
-        self.w_q = w_q
-        self.w_k = w_k
-        self.w_v = w_v
+        self.qkv = qkv(w_q, w_k, w_v)
 
     def forward(self, inputs):
         encoder_output, decoder_output = inputs
-        return torch.matmul(decoder_output, self.w_q), torch.matmul(encoder_output, self.w_k), torch.matmul(
-            encoder_output, self.w_v)
+        return self.qkv(decoder_output, encoder_output, encoder_output)
 
 
 class SelfAttentionLayer(nn.Module):
