@@ -1,8 +1,12 @@
+from typing import List, Callable, Any
+
 import math
 import numpy as np
 import torch
 import torch.nn as nn
 from enum import Enum
+
+from torch import Tensor
 
 softmax = torch.nn.Softmax(dim=1)
 
@@ -38,11 +42,11 @@ def encoder_stack(num_encoders, w_o):
 
 class EncoderStack:
     def __init__(self, num_encoders, w_o):
-        encoders = np.array(list(map(lambda x: Encoder(SingleSourceQKVLayer(W_Q, W_K, W_V), w_o,
+        self.encoders: list[Encoder] = list(map(lambda x: Encoder(SingleSourceQKVLayer(W_Q, W_K, W_V), w_o,
                                                        Parameters.NUM_HEADS,
                                                        Parameters.WORD_WIDTH),
-                                     range(num_encoders))))
-        self.stack = nn.Sequential(*encoders)
+                                     range(num_encoders)))
+        self.stack = nn.Sequential(*self.encoders)
 
     def forward(self, input):
         return self.stack(input)
@@ -50,10 +54,10 @@ class EncoderStack:
 
 class DecoderStack:
     def __init__(self, num_decoders, w_o):
-        decoders = np.array(list(
+        self.decoders: list[Decoder] = list(
             map(lambda x: Decoder(SingleSourceQKVLayer(W_Q, W_K, W_V), MultiSourceQKVLayer(W_Q, W_K, W_V), w_o),
-                range(num_decoders))))
-        self.stack = nn.Sequential(*decoders)
+                range(num_decoders)))
+        self.stack = nn.Sequential(*self.decoders)
 
     def forward(self, encoder_output, decoder_target):
         encoder_output, decoder_output = self.stack((encoder_output, decoder_target))
@@ -68,6 +72,11 @@ def decoder_stack(num_decoders, w_o, mode=TransformerMode.INFERENCE):
 
 
 class Transformer:
+    linear: Tensor
+    embedding: Callable[[Tensor], Tensor]
+    vector_buffer: list[Tensor]
+    text_buffer: list[str]
+
     def __init__(self, vocabulary_map, mode=TransformerMode.INFERENCE):
         self.vocabulary_map = vocabulary_map
         self.mode = mode
@@ -75,9 +84,14 @@ class Transformer:
         self.decoders = decoder_stack(6, W_O)
         self.encoders = encoder_stack(6, W_O)
         self.linear = torch.randn([Parameters.WORD_WIDTH, Parameters.MAX_WORDS])
+        # vector_buffer stores the vector representation of the output
+        # text_buffer stores the text representation of the output
         self.vector_buffer = [Tokens.START_TOKEN]
         self.text_buffer = ["<SOS>"]
 
+    # The decoder_target does not need to be passed in if the Transformer is in Inference mode, since
+    # the outputs are fed back in as the decoder input, save the first time, where the fed token is
+    # <SOS>=<Start of Sentence>
     def forward(self, words, decoder_target=None):
         if (decoder_target is None and self.mode == TransformerMode.TRAINING):
             raise Exception("Decoder Target must be provided during Training mode.")
@@ -97,6 +111,8 @@ class Transformer:
             # The last word is chosen as the predicted word
             self.vector_buffer.append(vocabulary_output[-1][1])
             self.text_buffer.append(vocabulary_output[-1][0])
+        # Returns the stored text_buffer, vector_buffer for Inference mode, otherwise outputs the Decoder
+        # output as-is
         return [text_buffer, vector_buffer] if self.mode == TransformerMode.TRAINING else [self.text_buffer,
                                                                                            self.vector_buffer]
 
@@ -146,11 +162,15 @@ class SelfAttentionLayer(nn.Module):
     def attention_scores(self, qkvs):
         q, k, v = qkvs
         q_dot_k = torch.matmul(q, k.t()) / math.sqrt(q.shape[1])
+        # The SelfAttentionLayer is used in both masked and unmasked variants. The mask value is used
+        # to decide if the intermediate matrix should be masked or not before performing Softmax
         maybe_masked_q_dot_k = self.masked(q_dot_k) if self.mask else q_dot_k
         return torch.matmul(softmax(maybe_masked_q_dot_k), v)
 
 
 class MultiheadedAttention(nn.Module):
+    attention_layers: list[SelfAttentionLayer]
+
     def __init__(self, w_o, num_heads=Parameters.NUM_HEADS, mask=False):
         super(MultiheadedAttention, self).__init__()
         self.w_o = w_o
@@ -184,7 +204,7 @@ class Encoder(nn.Module):
         ffnn_outputs = torch.stack(
             list(map(lambda attention_vector: self.feedforward_layer(attention_vector), layer_normed_multihead_output)))
         layer_normed_ffnn_output = self.layer_norm(ffnn_outputs + layer_normed_multihead_output)
-        # print(f"FFNN Shape={layer_normed_ffnn_output.shape}")
+        print(f"FFNN Shape={layer_normed_ffnn_output.shape}")
         return layer_normed_ffnn_output
 
 
@@ -247,11 +267,11 @@ VOCABULARY_MAP = []
 for i in range(Parameters.MAX_WORDS):
     VOCABULARY_MAP.append(["Word", torch.randn(Parameters.WORD_WIDTH)])
 
-num_words = 10
+num_words = 12
 words = torch.randn([num_words, Parameters.WORD_WIDTH])
 decoder_target = torch.randn([5, Parameters.WORD_WIDTH])
 t = Transformer(VOCABULARY_MAP, mode=TransformerMode.TRAINING)
-output = t.forward(words, decoder_target)
+texts, embeddings = t.forward(words, decoder_target)
 # output = t.forward(words, decoder_target)
 # output = t.forward(words, decoder_target)
-print(output[0])
+print(texts)
